@@ -433,6 +433,10 @@ namespace ts {
             name: "strictNullChecks",
             type: "boolean",
             description: Diagnostics.Enable_strict_null_checks
+        },
+        {
+            name: "dynamicTypeChecks",
+            type: "boolean",
         }
     ];
 

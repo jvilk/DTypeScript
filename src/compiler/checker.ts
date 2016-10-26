@@ -347,9 +347,156 @@ namespace ts {
         const builtinGlobals = createMap<Symbol>();
         builtinGlobals[undefinedSymbol.name] = undefinedSymbol;
 
+        const dynamicCheckFunctions = createMap<string>();
+
         initializeTypeChecker();
 
         return checker;
+
+        function getDynamicCheckFunctions(): string {
+            return Object.keys(dynamicCheckFunctions).map((fcnName) => {
+                return `function ${fcnName}(val) {
+  ${dynamicCheckFunctions[fcnName]}
+}`;
+            }).join("\n");
+        }
+
+        function getDynamicCheckFunction(type: Type, typeParameters: TypeParameter[] = []): string {
+            // TODO: IDs need to be stable when we introduce eval().
+            const functionName = `__$check${type.id}`;
+            if (dynamicCheckFunctions[functionName] !== undefined) {
+                return functionName;
+            }
+
+            // To avoid infinite recursion, add an empty string for this function's body now.
+            dynamicCheckFunctions[functionName] = '';
+
+            // Generate the body of the function.
+            if (type.flags & TypeFlags.Union) {
+                const unionType = <UnionType> type;
+                dynamicCheckFunctions[functionName] = `return ${unionType.types.map((type) => {
+                    return `${getDynamicCheckFunction(type)}(val, ctx)`
+                }).join(" || ")};`
+            } else if (type.flags & TypeFlags.Intersection) {
+                const intersectionType = <IntersectionType> type;
+                dynamicCheckFunctions[functionName] = `return ${intersectionType.types.map((type) => {
+                    return `${getDynamicCheckFunction(type)}(val, ctx)`
+                }).join(" && ")};`
+            } else if (type.flags & TypeFlags.Any) {
+                dynamicCheckFunctions[functionName] = `return true;`;
+            } else if (type.flags & TypeFlags.String) {
+                dynamicCheckFunctions[functionName] = `return typeof(val) === 'string';`;
+            } else if (type.flags & TypeFlags.Boolean) {
+                dynamicCheckFunctions[functionName] = `return typeof(val) === 'boolean';`;
+            } else if (type.flags & TypeFlags.Number) {
+                dynamicCheckFunctions[functionName] = `return typeof(val) === 'number';`;
+            } else if (type.flags & TypeFlags.Enum) {
+                let enumType = <EnumType> type;
+                if (enumType.memberTypes) {
+                    // Const enum.
+                    const memberTypeNames = Object.keys(enumType.memberTypes);
+                    dynamicCheckFunctions[functionName] = `switch(val) {
+${memberTypeNames.map((literalName) => {
+const literal = enumType.memberTypes[literalName];
+// Const enums are numeric literals.
+return `  case ${literal.text}:`;
+}).join("\n")}
+    return true;
+  default:
+    return false;
+}`;
+                } else {
+                    // Non-const enum. Does not have computed properties. Check dynamically.
+                    let symbol = type.symbol;
+                    const memberTypeNames = Object.keys(symbol.exports);
+                    let pathToEnumObj = symbol.name;
+                    while (symbol.parent) {
+                        symbol = symbol.parent;
+                        pathToEnumObj = `${symbol.name}.${pathToEnumObj}`;
+                    }
+                    dynamicCheckFunctions[functionName] = `switch(val) {
+${memberTypeNames.map((literalName) => {
+    return `  case ${pathToEnumObj}['${literalName}']:`
+}).join("\n")}
+    return true;
+  default:
+    return false;
+}`;
+                }
+            } else if (type.flags & TypeFlags.Literal) {
+                // TODO: Escape literal.
+                const literalType = <LiteralType> type;
+                let fcnTxt = `return val === `;
+                if (type.flags & (TypeFlags.StringLiteral | TypeFlags.EnumLiteral)) {
+                    fcnTxt += `'${literalType.text}';`;
+                } else if (type.flags & (TypeFlags.NumberLiteral | TypeFlags.BooleanLiteral)) {
+                    fcnTxt += `${literalType.text};`;
+                }
+                dynamicCheckFunctions[functionName] = fcnTxt;
+            } else if (type.flags & TypeFlags.ESSymbol) {
+                throw new Error("Unsupported.");
+            } else if (type.flags & (TypeFlags.Void | TypeFlags.Undefined)) {
+                dynamicCheckFunctions[functionName] = `return val === undefined;`;
+            } else if (type.flags & TypeFlags.Null) {
+                dynamicCheckFunctions[functionName] = `return val === null;`;
+            } else if (type.flags & TypeFlags.Never) {
+                dynamicCheckFunctions[functionName] = `throw new Error('Should never acquire value with type of never.');`;
+            } else if (type.flags & TypeFlags.TypeParameter) {
+                // Parameter should be in typeParameters.
+                dynamicCheckFunctions[functionName] = `throw new Error('TypeParameter not supported yet.');`;
+            // ObjectType = Class | Interface | Reference | Tuple | Anonymous,
+            } else if (type.flags & (TypeFlags.Class | TypeFlags.Interface | TypeFlags.Anonymous)) {
+                const resolvedType = <ResolvedType>type;
+                // NOTE: getters/setters are not expressible with interfaces! :)
+                // TODO: signatures.
+                // TODO: index types.
+                // TODO: parents!
+                dynamicCheckFunctions[functionName] = `return ${resolvedType.properties.map((s) => {
+                    const type = getTypeOfSymbol(s);
+                    const fcnName = getDynamicCheckFunction(type, typeParameters);
+                    const optional = s.flags & SymbolFlags.Optional;
+                    return `(${optional ? `val['${s.name}'] === undefined || ` : ''}${fcnName}(val['${s.name}']))`;
+                }).join(" && ")};`;
+                // ?!?!?
+                /*
+                   signaturesRelatedTo(source, target, SignatureKind.Call, reportErrors);
+                signaturesRelatedTo(source, target, SignatureKind.Construct, reportErrors);
+                indexTypesRelatedTo(source, originalSource, target, IndexKind.String, reportErrors);
+                indexTypesRelatedTo(source, originalSource, target, IndexKind.Number, reportErrors);
+                                }
+                            }
+                        }
+                    }
+                */
+            } else if (type.flags & TypeFlags.Reference) {
+                // Contains typeArguments that fill in innerTypeParameters in target type.
+                dynamicCheckFunctions[functionName] = `throw new Error('Reference not supported yet.');`;
+            } else if (type.flags & TypeFlags.Tuple) {
+                // Tuple types have a set of type parameters.
+                // Those need to be resolved by an outer reference type.
+                dynamicCheckFunctions[functionName] = `throw new Error('Tuple not supported yet.');`;
+            } else if (type.flags & TypeFlags.ContainsAnyFunctionType) {
+                dynamicCheckFunctions[functionName] = `return typeof(val) === 'function';`;
+            } else {
+                console.error(type);
+                throw new Error(`Unrecognized type.`);
+            } /*else if (type.flags & TypeFlags.ThisType) {
+
+            } else if (type.flags & TypeFlags.Instantiated) {
+                // ?!?!?!?
+            } else if (type.flags & TypeFlags.ObjectLiteral) {
+
+            } else if (type.flags & TypeFlags.FreshObjectLiteral) {
+
+            } else if (type.flags & TypeFlags.ContainsWideningType) {
+
+            } else if (type.flags & TypeFlags.ContainsObjectLiteral) {
+
+            } else if (type.flags & TypeFlags.ObjectLiteralPatternWithComputedProperties) {
+
+            }*/
+            return functionName;
+        }
 
         function getEmitResolver(sourceFile: SourceFile, cancellationToken: CancellationToken) {
             // Ensure we have all the type information in place for this file so that all the
@@ -12326,6 +12473,8 @@ namespace ts {
                     checkTypeComparableTo(exprType, targetType, node, Diagnostics.Type_0_cannot_be_converted_to_type_1);
                 }
             }
+            node.checkCastFunction = getDynamicCheckFunction(targetType);
+            node.typeString = typeToString(targetType);
             return targetType;
         }
 
@@ -18686,7 +18835,8 @@ namespace ts {
                 isArgumentsLocalBinding,
                 getExternalModuleFileFromDeclaration,
                 getTypeReferenceDirectivesForEntityName,
-                getTypeReferenceDirectivesForSymbol
+                getTypeReferenceDirectivesForSymbol,
+                getDynamicCheckFunctions
             };
 
             // defined here to avoid outer scope pollution

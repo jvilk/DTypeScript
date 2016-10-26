@@ -386,6 +386,15 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };`;
 
+        const dynamicAssertionHelper = `
+function __dynamicCheck(val, checkFcn, type, filename, line, column) {
+  if (checkFcn(val)) {
+    return val;
+  }
+  debugger;
+  throw new Error(filename + ':' + line + ':' + column + ' Typecast failed: Unable to cast ' + typeof(val) + ' "' + val + '" to ' + type + '.');
+}`;
+
         const compilerOptions = host.getCompilerOptions();
         const languageVersion = getEmitScriptTarget(compilerOptions);
         const modulekind = getEmitModuleKind(compilerOptions);
@@ -556,6 +565,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
             let decorateEmitted: boolean;
             let paramEmitted: boolean;
             let awaiterEmitted: boolean;
+            let dynamicAssertionsEmitted: boolean;
             let tempFlags: TempFlags = 0;
             let tempVariables: Identifier[];
             let tempParameters: Identifier[];
@@ -637,6 +647,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
                 paramEmitted = false;
                 awaiterEmitted = false;
                 assignEmitted = false;
+                dynamicAssertionsEmitted = false;
                 tempFlags = 0;
                 tempVariables = undefined;
                 tempParameters = undefined;
@@ -2118,27 +2129,29 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
             }
 
             function parenthesizeForAccess(expr: Expression): LeftHandSideExpression {
-                // When diagnosing whether the expression needs parentheses, the decision should be based
-                // on the innermost expression in a chain of nested type assertions.
-                while (expr.kind === SyntaxKind.TypeAssertionExpression ||
-                    expr.kind === SyntaxKind.AsExpression ||
-                    expr.kind === SyntaxKind.NonNullExpression) {
-                    expr = (<AssertionExpression | NonNullExpression>expr).expression;
-                }
+                if (!compilerOptions.dynamicTypeChecks) {
+                    // When diagnosing whether the expression needs parentheses, the decision should be based
+                    // on the innermost expression in a chain of nested type assertions.
+                    while (expr.kind === SyntaxKind.TypeAssertionExpression ||
+                        expr.kind === SyntaxKind.AsExpression ||
+                        expr.kind === SyntaxKind.NonNullExpression) {
+                        expr = (<AssertionExpression | NonNullExpression>expr).expression;
+                    }
 
-                // isLeftHandSideExpression is almost the correct criterion for when it is not necessary
-                // to parenthesize the expression before a dot. The known exceptions are:
-                //
-                //    NewExpression:
-                //       new C.x        -> not the same as (new C).x
-                //    NumberLiteral
-                //       1.x            -> not the same as (1).x
-                //
-                if (isLeftHandSideExpression(expr) &&
-                    expr.kind !== SyntaxKind.NewExpression &&
-                    expr.kind !== SyntaxKind.NumericLiteral) {
+                    // isLeftHandSideExpression is almost the correct criterion for when it is not necessary
+                    // to parenthesize the expression before a dot. The known exceptions are:
+                    //
+                    //    NewExpression:
+                    //       new C.x        -> not the same as (new C).x
+                    //    NumberLiteral
+                    //       1.x            -> not the same as (1).x
+                    //
+                    if (isLeftHandSideExpression(expr) &&
+                        expr.kind !== SyntaxKind.NewExpression &&
+                        expr.kind !== SyntaxKind.NumericLiteral) {
 
-                    return <LeftHandSideExpression>expr;
+                        return <LeftHandSideExpression>expr;
+                    }
                 }
                 const node = <ParenthesizedExpression>createSynthesizedNode(SyntaxKind.ParenthesizedExpression);
                 node.expression = expr;
@@ -2391,11 +2404,13 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
             }
 
             function skipParentheses(node: Expression): Expression {
-                while (node.kind === SyntaxKind.ParenthesizedExpression ||
-                    node.kind === SyntaxKind.TypeAssertionExpression ||
-                    node.kind === SyntaxKind.AsExpression ||
-                    node.kind === SyntaxKind.NonNullExpression) {
-                    node = (<ParenthesizedExpression | AssertionExpression | NonNullExpression>node).expression;
+                if (!compilerOptions.dynamicTypeChecks) {
+                    while (node.kind === SyntaxKind.ParenthesizedExpression ||
+                        node.kind === SyntaxKind.TypeAssertionExpression ||
+                        node.kind === SyntaxKind.AsExpression ||
+                        node.kind === SyntaxKind.NonNullExpression) {
+                        node = (<ParenthesizedExpression | AssertionExpression | NonNullExpression>node).expression;
+                    }
                 }
                 return node;
             }
@@ -2564,14 +2579,29 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
                 }
             }
 
+            function emitAssertionExpression(node: AssertionExpression): void {
+                if (compilerOptions.dynamicTypeChecks && node.checkCastFunction) {
+                    write(`__dynamicCheck(`);
+                    emit(node.expression);
+                    const sourceFile = getSourceFileOfNode(node);
+                    const lineMap = sourceFile.lineMap;
+                    const data = computeLineAndCharacterOfPosition(lineMap, node.pos)
+                    write(`, ${node.checkCastFunction}, '${node.typeString}', '${sourceFile.fileName}', '${data.line}', '${data.character}')`);
+                } else {
+                    emit(node.expression);
+                }
+            }
+
             function emitParenExpression(node: ParenthesizedExpression) {
                 // If the node is synthesized, it means the emitter put the parentheses there,
                 // not the user. If we didn't want them, the emitter would not have put them
                 // there.
                 if (!nodeIsSynthesized(node) && node.parent.kind !== SyntaxKind.ArrowFunction) {
-                    if (node.expression.kind === SyntaxKind.TypeAssertionExpression ||
-                        node.expression.kind === SyntaxKind.AsExpression ||
-                        node.expression.kind === SyntaxKind.NonNullExpression) {
+                    // Do not omit parenthesis when dynamic type checks are enabled.
+                    if (!compilerOptions.dynamicTypeChecks &&
+                        (node.expression.kind === SyntaxKind.TypeAssertionExpression ||
+                         node.expression.kind === SyntaxKind.AsExpression ||
+                         node.expression.kind === SyntaxKind.NonNullExpression)) {
                         let operand = (<TypeAssertion | NonNullExpression>node.expression).expression;
 
                         // Make sure we consider all nested cast expressions, e.g.:
@@ -4958,8 +4988,10 @@ const _super = (function (geti, seti) {
 
                 // Unwrap all type assertions.
                 let current = body;
-                while (current.kind === SyntaxKind.TypeAssertionExpression) {
-                    current = (<TypeAssertion>current).expression;
+                if (!compilerOptions.dynamicTypeChecks) {
+                    while (current.kind === SyntaxKind.TypeAssertionExpression) {
+                        current = (<TypeAssertion>current).expression;
+                    }
                 }
 
                 emitParenthesizedIf(body, current.kind === SyntaxKind.ObjectLiteralExpression);
@@ -7872,6 +7904,12 @@ const _super = (function (geti, seti) {
                         writeLines(awaiterHelper);
                         awaiterEmitted = true;
                     }
+
+                    if (!dynamicAssertionsEmitted && compilerOptions.dynamicTypeChecks) {
+                        writeLines(dynamicAssertionHelper);
+                        writeLines(resolver.getDynamicCheckFunctions());
+                        dynamicAssertionsEmitted = true;
+                    }
                 }
             }
 
@@ -8090,8 +8128,9 @@ const _super = (function (geti, seti) {
                         return emitTaggedTemplateExpression(<TaggedTemplateExpression>node);
                     case SyntaxKind.TypeAssertionExpression:
                     case SyntaxKind.AsExpression:
+                        return emitAssertionExpression(<AssertionExpression> node);
                     case SyntaxKind.NonNullExpression:
-                        return emit((<AssertionExpression | NonNullExpression>node).expression);
+                        return emit((<NonNullExpression>node).expression);
                     case SyntaxKind.ParenthesizedExpression:
                         return emitParenExpression(<ParenthesizedExpression>node);
                     case SyntaxKind.FunctionDeclaration:

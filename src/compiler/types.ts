@@ -1038,12 +1038,16 @@ namespace ts {
     export interface AsExpression extends Expression {
         expression: Expression;
         type: TypeNode;
+        checkCastFunction?: string;
+        typeString?: string;
     }
 
     // @kind(SyntaxKind.TypeAssertionExpression)
     export interface TypeAssertion extends UnaryExpression {
         type: TypeNode;
         expression: UnaryExpression;
+        checkCastFunction?: string;
+        typeString?: string;
     }
 
     export type AssertionExpression = TypeAssertion | AsExpression;
@@ -2061,6 +2065,7 @@ namespace ts {
         getExternalModuleFileFromDeclaration(declaration: ImportEqualsDeclaration | ImportDeclaration | ExportDeclaration | ModuleDeclaration): SourceFile;
         getTypeReferenceDirectivesForEntityName(name: EntityNameOrEntityNameExpression): string[];
         getTypeReferenceDirectivesForSymbol(symbol: Symbol, meaning?: SymbolFlags): string[];
+        /* @internal */ getDynamicCheckFunctions(): string;
     }
 
     export const enum SymbolFlags {
@@ -2651,6 +2656,7 @@ namespace ts {
         typeRoots?: string[];
         /*@internal*/ version?: boolean;
         /*@internal*/ watch?: boolean;
+        dynamicTypeChecks?: boolean;
 
         [option: string]: CompilerOptionsValue | undefined;
     }
