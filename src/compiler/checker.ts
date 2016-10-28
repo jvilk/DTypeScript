@@ -347,155 +347,215 @@ namespace ts {
         const builtinGlobals = createMap<Symbol>();
         builtinGlobals[undefinedSymbol.name] = undefinedSymbol;
 
-        const dynamicCheckFunctions = createMap<string>();
+        const dynamicCheckRoots = createMap<{varName: string, t: Type}>();
 
         initializeTypeChecker();
 
         return checker;
 
-        function getDynamicCheckFunctions(): string {
-            return Object.keys(dynamicCheckFunctions).map((fcnName) => {
-                return `function ${fcnName}(val) {
-  ${dynamicCheckFunctions[fcnName]}
-}`;
-            }).join("\n");
+        function getRuntimeTypeVariableName(node: TypeNode, varName: string): string {
+            const type = getTypeFromTypeNode(node);
+            if (type) {
+                const idStr = `${type.id}`;
+                let entry = dynamicCheckRoots[idStr];
+                if (entry) {
+                    return entry.varName;
+                }
+                dynamicCheckRoots[idStr] = {t: type, varName: varName};
+                return varName;
+            } else {
+                console.log(node);
+                throw new Error(`Cannot find type for node!`);
+            }
         }
 
-        function getDynamicCheckFunction(type: Type, typeParameters: TypeParameter[] = []): string {
-            // TODO: IDs need to be stable when we introduce eval().
-            const functionName = `__$check${type.id}`;
-            if (dynamicCheckFunctions[functionName] !== undefined) {
-                return functionName;
+        /**
+         * Emits the given type using `write` if not already written.
+         * Uses emitMap to determine if the type is already written.
+         * Returns the type's variable name.
+         */
+        function emitRuntimeType(type: Type, varName: string, emitQueue: { varName: string, t: Type }[], typeStatus: Map<{emitted: boolean, name: string}>, deferredAssignments: string[], write: (str: string) => void, getNextVarName: () => string): void {
+            function getNameOrPlaceholder(assignmentLHS: string, refType: Type): string {
+                const idStr = `${refType.id}`;
+                const ts = typeStatus[idStr];
+                if (ts) {
+                    if (ts.emitted) {
+                        return ts.name;
+                    } else {
+                        deferredAssignments.push(`${assignmentLHS} = ${ts.name};`);
+                        return 'null';
+                    }
+                } else {
+                    const refName = getNextVarName();
+                    typeStatus[idStr] = {
+                        emitted: false,
+                        name: refName
+                    };
+                    emitQueue.push({
+                        varName: refName,
+                        t: refType
+                    });
+                    deferredAssignments.push(`${assignmentLHS} = ${refName};`);
+                    return 'null';
+                }
             }
 
-            // To avoid infinite recursion, add an empty string for this function's body now.
-            dynamicCheckFunctions[functionName] = '';
+            function emitSignature(indent: string, type: string, i: number, s: Signature): void {
+                let params = s.typeParameters
+                let restParam: Type = null;
+                let prefix = `${varName}.${type}[${i}]`;
+                if (s.hasRestParameter) {
+                    restParam = params[params.length - 1];
+                    params = params.slice(0, params.length - 1);
+                }
+                write(`{
+${indent}  args: [${params.map((t, j) => getNameOrPlaceholder(`${prefix}.args[${j}]`, t)).join(", ")}],\n`);
+                if (restParam) {
+                    write(`${indent}  varargs: ${getNameOrPlaceholder(`${prefix}.varargs`, restParam)},\n`);
+                }
+                write(`${indent}  result: ${getNameOrPlaceholder(`${prefix}.result`, s.resolvedReturnType)},`);
+                write(`${indent}  mandatoryArgs: ${s.minArgumentCount}`);
+                write(`${indent}}`);
+            }
 
-            // Generate the body of the function.
-            if (type.flags & TypeFlags.Union) {
-                const unionType = <UnionType> type;
-                dynamicCheckFunctions[functionName] = `return ${unionType.types.map((type) => {
-                    return `${getDynamicCheckFunction(type)}(val, ctx)`
-                }).join(" || ")};`
-            } else if (type.flags & TypeFlags.Intersection) {
-                const intersectionType = <IntersectionType> type;
-                dynamicCheckFunctions[functionName] = `return ${intersectionType.types.map((type) => {
-                    return `${getDynamicCheckFunction(type)}(val, ctx)`
-                }).join(" && ")};`
+            function emitSignatures(indent: string, type: string, sigs: Signature[]): void {
+                const sigIndent = indent + "  ";
+                write(`[\n`);
+                for (let i = 0; i < sigs.length; i++) {
+                    write(`${indent}  `);
+                    emitSignature(sigIndent, type, i, sigs[i]);
+                    write(",\n");
+                }
+                write(`${indent}]`);
+            }
+
+            write(`window.${varName}  = {\n  id: -1,\n`);
+            if (type.symbol && type.symbol.name) {
+                write(`  name: '${type.symbol.name}',\n`);
+            }
+            if (type.flags & TypeFlags.UnionOrIntersection) {
+                const unionType = <UnionOrIntersectionType> type;
+                write(`  type: ${(type.flags & TypeTag.Union) ? TypeTag.Union : TypeTag.Intersection},\n  members: [${unionType.types.map(
+                    (type, i) => getNameOrPlaceholder(`${varName}.members[${i}]`, type)).join(", ")}],\n`);
             } else if (type.flags & TypeFlags.Any) {
-                dynamicCheckFunctions[functionName] = `return true;`;
+                write(`  type: ${TypeTag.Any},\n`);
             } else if (type.flags & TypeFlags.String) {
-                dynamicCheckFunctions[functionName] = `return typeof(val) === 'string';`;
+                write(`  type: ${TypeTag.String},\n`);
             } else if (type.flags & TypeFlags.Boolean) {
-                dynamicCheckFunctions[functionName] = `return typeof(val) === 'boolean';`;
+                write(`  type: ${TypeTag.Boolean},\n`);
             } else if (type.flags & TypeFlags.Number) {
-                dynamicCheckFunctions[functionName] = `return typeof(val) === 'number';`;
+                write(`  type: ${TypeTag.Numeric},\n`);
             } else if (type.flags & TypeFlags.Enum) {
                 let enumType = <EnumType> type;
                 if (enumType.memberTypes) {
                     // Const enum.
+                    // Union type of literals.
                     const memberTypeNames = Object.keys(enumType.memberTypes);
-                    dynamicCheckFunctions[functionName] = `switch(val) {
-${memberTypeNames.map((literalName) => {
-const literal = enumType.memberTypes[literalName];
-// Const enums are numeric literals.
-return `  case ${literal.text}:`;
-}).join("\n")}
-    return true;
-  default:
-    return false;
-}`;
+                    write(`  type: ${TypeTag.Union},\n  members: [${memberTypeNames.map((name) => {
+                        const memberType = enumType.memberTypes[name];
+                        return `{ name: ${name}, id: -1, type: ${TypeTag.NumericLiteral}, value: ${memberType.text} }`
+                    }).join(", ")}],\n`);
                 } else {
-                    // Non-const enum. Does not have computed properties. Check dynamically.
-                    let symbol = type.symbol;
-                    const memberTypeNames = Object.keys(symbol.exports);
-                    let pathToEnumObj = symbol.name;
-                    while (symbol.parent) {
-                        symbol = symbol.parent;
-                        pathToEnumObj = `${symbol.name}.${pathToEnumObj}`;
-                    }
-                    dynamicCheckFunctions[functionName] = `switch(val) {
-${memberTypeNames.map((literalName) => {
-    return `  case ${pathToEnumObj}['${literalName}']:`
-}).join("\n")}
-    return true;
-  default:
-    return false;
-}`;
+                    // Non-const enum. Does not have static properties. Use base type.
+                    write(`  type: ${TypeTag.Numeric},\n`);
                 }
             } else if (type.flags & TypeFlags.Literal) {
-                // TODO: Escape literal.
                 const literalType = <LiteralType> type;
-                let fcnTxt = `return val === `;
-                if (type.flags & (TypeFlags.StringLiteral | TypeFlags.EnumLiteral)) {
-                    fcnTxt += `'${literalType.text}';`;
-                } else if (type.flags & (TypeFlags.NumberLiteral | TypeFlags.BooleanLiteral)) {
-                    fcnTxt += `${literalType.text};`;
+                let tagType = TypeTag.NumericLiteral;
+                if (type.flags & TypeFlags.StringLiteral) {
+                    tagType = TypeTag.StringLiteral;
+                } else if (type.flags & TypeFlags.BooleanLiteral) {
+                    tagType = TypeTag.BooleanLiteral;
                 }
-                dynamicCheckFunctions[functionName] = fcnTxt;
+                write(`  type: ${tagType},\n  value:`);
+                if (tagType === TypeTag.StringLiteral) {
+                    write(`'${literalType.text}'`);
+                } else if (tagType === TypeTag.BooleanLiteral) {
+                    write(`${literalType === <any> trueType ? 'true' : literalType === <any> falseType ? 'false' : 'WHAT'}`);
+                } else {
+                    write(literalType.text);
+                }
+                write(",\n");
             } else if (type.flags & TypeFlags.ESSymbol) {
                 throw new Error("Unsupported.");
             } else if (type.flags & (TypeFlags.Void | TypeFlags.Undefined)) {
-                dynamicCheckFunctions[functionName] = `return val === undefined;`;
+                write(`  type: ${TypeTag.Void},\n`);
             } else if (type.flags & TypeFlags.Null) {
-                dynamicCheckFunctions[functionName] = `return val === null;`;
+                write(`  type: ${TypeTag.Null},\n`)
             } else if (type.flags & TypeFlags.Never) {
-                dynamicCheckFunctions[functionName] = `throw new Error('Should never acquire value with type of never.');`;
+                write(`  type: ${TypeTag.Never},\n`);
             } else if (type.flags & TypeFlags.TypeParameter) {
-                // Parameter should be in typeParameters.
-                dynamicCheckFunctions[functionName] = `throw new Error('TypeParameter not supported yet.');`;
+                write(`  type: ${TypeTag.TypeParameter},\n  index: ${0},\n`);
             // ObjectType = Class | Interface | Reference | Tuple | Anonymous,
             } else if (type.flags & (TypeFlags.Class | TypeFlags.Interface | TypeFlags.Anonymous)) {
+                // TODO: Parents??
                 const resolvedType = <ResolvedType>type;
-                // NOTE: getters/setters are not expressible with interfaces! :)
-                // TODO: signatures.
-                // TODO: index types.
-                // TODO: parents!
-                dynamicCheckFunctions[functionName] = `return ${resolvedType.properties.map((s) => {
-                    const type = getTypeOfSymbol(s);
-                    const fcnName = getDynamicCheckFunction(type, typeParameters);
-                    const optional = s.flags & SymbolFlags.Optional;
-                    return `(${optional ? `val['${s.name}'] === undefined || ` : ''}${fcnName}(val['${s.name}']))`;
-                }).join(" && ")};`;
-                // ?!?!?
-                /*
-                   signaturesRelatedTo(source, target, SignatureKind.Call, reportErrors);
-                signaturesRelatedTo(source, target, SignatureKind.Construct, reportErrors);
-                indexTypesRelatedTo(source, originalSource, target, IndexKind.String, reportErrors);
-                indexTypesRelatedTo(source, originalSource, target, IndexKind.Number, reportErrors);
-                                }
-                            }
-                        }
-                    }
-                */
+                write(`  type: ${TypeTag.ObjectType},\n`);
+                if (resolvedType.properties) {
+                    write(`  properties: {\n`);
+                    write(`    ${resolvedType.properties.map((s) => {
+                        const type = getTypeOfSymbol(s);
+                        const propTypeVarName = getNameOrPlaceholder(`${varName}.properties['${s.name}'].type`, type);
+                        const optional = !!(s.flags & SymbolFlags.Optional);
+                        return `${s.name}: { optional: ${optional}, name: '${s.name}', type: ${propTypeVarName} }`;
+                    }).join(`,\n    `)},\n`);
+                    write(`  },\n`);
+                }
+                write(`  callSignatures: `);
+                if (resolvedType.callSignatures) {
+                    emitSignatures('    ', 'callSignatures', resolvedType.callSignatures);
+                } else {
+                    write("[]");
+                }
+                write(",\n");
+                write(`  constructSignatures: `);
+                if (resolvedType.constructSignatures) {
+                    emitSignatures('    ', 'constructSignatures', resolvedType.constructSignatures);
+                } else {
+                    write("[]");
+                }
+                write(",\n");
+                if (resolvedType.stringIndexInfo) {
+                    write(`  stringIndexType: ${getNameOrPlaceholder(`${varName}.stringIndexType`, resolvedType.stringIndexInfo.type)},\n`);
+                }
+                if (resolvedType.numberIndexInfo) {
+                    write(`  numericIndexType: ${getNameOrPlaceholder(`${varName}.numericIndexType`, resolvedType.numberIndexInfo.type)},\n`);
+                }
             } else if (type.flags & TypeFlags.Reference) {
                 // Contains typeArguments that fill in innerTypeParameters in target type.
-                dynamicCheckFunctions[functionName] = `throw new Error('Reference not supported yet.');`;
+                console.error(type);
+                throw new Error('Reference not supported yet.');
             } else if (type.flags & TypeFlags.Tuple) {
                 // Tuple types have a set of type parameters.
                 // Those need to be resolved by an outer reference type.
-                dynamicCheckFunctions[functionName] = `throw new Error('Tuple not supported yet.');`;
-            } else if (type.flags & TypeFlags.ContainsAnyFunctionType) {
-                dynamicCheckFunctions[functionName] = `return typeof(val) === 'function';`;
+                console.error(type);
+                throw new Error('Tuple not supported yet.');
             } else {
                 console.error(type);
                 throw new Error(`Unrecognized type.`);
-            } /*else if (type.flags & TypeFlags.ThisType) {
+            }
+            write(`};\n`);
+        }
 
-            } else if (type.flags & TypeFlags.Instantiated) {
-                // ?!?!?!?
-            } else if (type.flags & TypeFlags.ObjectLiteral) {
-
-            } else if (type.flags & TypeFlags.FreshObjectLiteral) {
-
-            } else if (type.flags & TypeFlags.ContainsWideningType) {
-
-            } else if (type.flags & TypeFlags.ContainsObjectLiteral) {
-
-            } else if (type.flags & TypeFlags.ObjectLiteralPatternWithComputedProperties) {
-
-            }*/
-            return functionName;
+        function emitRuntimeTypeDeclarations(write: (str: string) => void, getNextVarName: () => string): void {
+            let emitQueue: { varName: string, t: Type}[] = [];
+            for (let rootName in dynamicCheckRoots) {
+                emitQueue.push(dynamicCheckRoots[rootName]);
+            }
+            let typeStatus = createMap<{emitted: boolean, name: string}>();
+            let deferredAssignments: string[] = [];
+            write("function installGlobalTypes() {\n");
+            while (emitQueue.length > 0) {
+                const next = emitQueue.pop();
+                const type = next.t;
+                const varName = next.varName;
+                const status = { emitted: false, name: varName };
+                typeStatus[`${type.id}`] = status;
+                emitRuntimeType(type, varName, emitQueue, typeStatus, deferredAssignments, write, getNextVarName);
+                status.emitted = true;
+            }
+            write(`\n${deferredAssignments.join("\n")}\n`);
+            write("\n}\n");
         }
 
         function getEmitResolver(sourceFile: SourceFile, cancellationToken: CancellationToken) {
@@ -12473,8 +12533,6 @@ ${memberTypeNames.map((literalName) => {
                     checkTypeComparableTo(exprType, targetType, node, Diagnostics.Type_0_cannot_be_converted_to_type_1);
                 }
             }
-            node.checkCastFunction = getDynamicCheckFunction(targetType);
-            node.typeString = typeToString(targetType);
             return targetType;
         }
 
@@ -18836,7 +18894,8 @@ ${memberTypeNames.map((literalName) => {
                 getExternalModuleFileFromDeclaration,
                 getTypeReferenceDirectivesForEntityName,
                 getTypeReferenceDirectivesForSymbol,
-                getDynamicCheckFunctions
+                emitRuntimeTypeDeclarations,
+                getRuntimeTypeVariableName
             };
 
             // defined here to avoid outer scope pollution

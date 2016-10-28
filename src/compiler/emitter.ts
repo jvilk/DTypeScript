@@ -386,15 +386,6 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };`;
 
-        const dynamicAssertionHelper = `
-function __dynamicCheck(val, checkFcn, type, filename, line, column) {
-  if (checkFcn(val)) {
-    return val;
-  }
-  debugger;
-  throw new Error(filename + ':' + line + ':' + column + ' Typecast failed: Unable to cast ' + typeof(val) + ' "' + val + '" to ' + type + '.');
-}`;
-
         const compilerOptions = host.getCompilerOptions();
         const languageVersion = getEmitScriptTarget(compilerOptions);
         const modulekind = getEmitModuleKind(compilerOptions);
@@ -565,7 +556,6 @@ function __dynamicCheck(val, checkFcn, type, filename, line, column) {
             let decorateEmitted: boolean;
             let paramEmitted: boolean;
             let awaiterEmitted: boolean;
-            let dynamicAssertionsEmitted: boolean;
             let tempFlags: TempFlags = 0;
             let tempVariables: Identifier[];
             let tempParameters: Identifier[];
@@ -603,6 +593,8 @@ function __dynamicCheck(val, checkFcn, type, filename, line, column) {
                 [ModuleKind.CommonJS]() {},
             });
 
+            let typeVariableNameCount = 0;
+
             return doEmit;
 
             function doEmit(jsFilePath: string, sourceMapFilePath: string, sourceFiles: SourceFile[], isBundledEmit: boolean) {
@@ -619,6 +611,10 @@ function __dynamicCheck(val, checkFcn, type, filename, line, column) {
 
                 // Do not call emit directly. It does not set the currentSourceFile.
                 forEach(sourceFiles, emitSourceFile);
+
+                if (compilerOptions.dynamicTypeChecks) {
+                    forEach(sourceFiles, emitRuntimeTypes);
+                }
 
                 writeLine();
 
@@ -647,7 +643,6 @@ function __dynamicCheck(val, checkFcn, type, filename, line, column) {
                 paramEmitted = false;
                 awaiterEmitted = false;
                 assignEmitted = false;
-                dynamicAssertionsEmitted = false;
                 tempFlags = 0;
                 tempVariables = undefined;
                 tempParameters = undefined;
@@ -706,6 +701,12 @@ function __dynamicCheck(val, checkFcn, type, filename, line, column) {
                         }
                     }
                 }
+            }
+
+            function makeTypeVariableName(): string {
+                let id = typeVariableNameCount++;
+                let name = `__$type${id}`;
+                return makeUniqueName(name);
             }
 
             // Generate a name that is unique within the current file and doesn't conflict with any names
@@ -2580,13 +2581,13 @@ function __dynamicCheck(val, checkFcn, type, filename, line, column) {
             }
 
             function emitAssertionExpression(node: AssertionExpression): void {
-                if (compilerOptions.dynamicTypeChecks && node.checkCastFunction) {
-                    write(`__dynamicCheck(`);
+                if (compilerOptions.dynamicTypeChecks) {
+                    write(`RuntimeTypes.assertType(`);
                     emit(node.expression);
                     const sourceFile = getSourceFileOfNode(node);
                     const lineMap = sourceFile.lineMap;
                     const data = computeLineAndCharacterOfPosition(lineMap, node.pos)
-                    write(`, ${node.checkCastFunction}, '${node.typeString}', '${sourceFile.fileName}', '${data.line}', '${data.character}')`);
+                    write(`, ${resolver.getRuntimeTypeVariableName(node.type, makeTypeVariableName())}, '${sourceFile.fileName}', '${data.line}', '${data.character}')`);
                 } else {
                     emit(node.expression);
                 }
@@ -4714,6 +4715,14 @@ function __dynamicCheck(val, checkFcn, type, filename, line, column) {
                 }
 
                 emitStart(node);
+                if (compilerOptions.dynamicTypeChecks) {
+                    write(`RuntimeTypes.registerType(${resolver.getRuntimeTypeVariableName(node.type, makeTypeVariableName())}, `);
+                    if (node.kind !== SyntaxKind.FunctionExpression) {
+                        // XXX: Hoisting! Might not work.
+                        emitDeclarationName(node);
+                        write(");\n");
+                    }
+                }
                 // For targeting below es6, emit functions-like declaration including arrow function using function keyword.
                 // When targeting ES6, emit arrow function natively in ES6 by omitting function keyword and using fat arrow instead
                 if (!shouldEmitAsArrowFunction(node)) {
@@ -4736,6 +4745,9 @@ function __dynamicCheck(val, checkFcn, type, filename, line, column) {
                 }
 
                 emitSignatureAndBody(node);
+                if (compilerOptions.dynamicTypeChecks && node.kind === SyntaxKind.FunctionExpression) {
+                    write(`)`);
+                }
                 if (modulekind !== ModuleKind.ES6 && kind === SyntaxKind.FunctionDeclaration && parent === currentSourceFile && node.name) {
                     emitExportMemberAssignments((<FunctionDeclaration>node).name);
                 }
@@ -7904,13 +7916,11 @@ const _super = (function (geti, seti) {
                         writeLines(awaiterHelper);
                         awaiterEmitted = true;
                     }
-
-                    if (!dynamicAssertionsEmitted && compilerOptions.dynamicTypeChecks) {
-                        writeLines(dynamicAssertionHelper);
-                        writeLines(resolver.getDynamicCheckFunctions());
-                        dynamicAssertionsEmitted = true;
-                    }
                 }
+            }
+
+            function emitRuntimeTypes() {
+                resolver.emitRuntimeTypeDeclarations(write, makeTypeVariableName);
             }
 
             function emitSourceFileNode(node: SourceFile) {

@@ -1038,16 +1038,12 @@ namespace ts {
     export interface AsExpression extends Expression {
         expression: Expression;
         type: TypeNode;
-        checkCastFunction?: string;
-        typeString?: string;
     }
 
     // @kind(SyntaxKind.TypeAssertionExpression)
     export interface TypeAssertion extends UnaryExpression {
         type: TypeNode;
         expression: UnaryExpression;
-        checkCastFunction?: string;
-        typeString?: string;
     }
 
     export type AssertionExpression = TypeAssertion | AsExpression;
@@ -2065,7 +2061,8 @@ namespace ts {
         getExternalModuleFileFromDeclaration(declaration: ImportEqualsDeclaration | ImportDeclaration | ExportDeclaration | ModuleDeclaration): SourceFile;
         getTypeReferenceDirectivesForEntityName(name: EntityNameOrEntityNameExpression): string[];
         getTypeReferenceDirectivesForSymbol(symbol: Symbol, meaning?: SymbolFlags): string[];
-        /* @internal */ getDynamicCheckFunctions(): string;
+        /* @internal */ getRuntimeTypeVariableName(node: TypeNode, varName: string): string;
+        /* @internal */ emitRuntimeTypeDeclarations(write: (str: string) => void, nextVarName: () => string): void;
     }
 
     export const enum SymbolFlags {
@@ -3027,5 +3024,114 @@ namespace ts {
     // SyntaxKind.SyntaxList
     export interface SyntaxList extends Node {
         _children: Node[];
+    }
+
+    export const enum TypeTag {
+        Any,
+        Numeric,
+        NumericLiteral,
+        String,
+        StringLiteral,
+        Boolean,
+        BooleanLiteral,
+        Void,
+        Null,
+        ObjectType,
+        Union,
+        Intersection,
+        TypeParameter,
+        Never
+    }
+
+    export type RuntimeType = RuntimeAnyType | RuntimeNumericType | RuntimeNumericLiteralType |
+        RuntimeStringType | RuntimeStringLiteralType | RuntimeBooleanType | RuntimeBooleanLiteralType |
+        RuntimeVoidType | RuntimeNullType | RuntimeUnionType | RuntimeIntersectionType |
+        RuntimeTypeParameterType | RuntimeObjectType | RuntimeNeverType;
+
+    export interface RuntimeIDBase {
+        id: number;
+    }
+
+    export interface RuntimeSignature extends RuntimeIDBase {
+        args: RuntimeType[];
+        varargs?: RuntimeType;
+        result: RuntimeType;
+        mandatoryArgs: number;
+    }
+
+    export interface RuntimeAnyType extends RuntimeIDBase {
+        type: TypeTag.Any;
+    }
+
+    export interface RuntimeNeverType extends RuntimeIDBase {
+        type: TypeTag.Never;
+    }
+
+    export interface RuntimeNumericType extends RuntimeIDBase {
+        type: TypeTag.Numeric;
+    }
+
+    export interface RuntimeNumericLiteralType extends RuntimeIDBase {
+        type: TypeTag.NumericLiteral;
+        value: number;
+    }
+
+    export interface RuntimeStringType extends RuntimeIDBase {
+        type: TypeTag.String;
+    }
+
+    export interface RuntimeStringLiteralType extends RuntimeIDBase {
+        type: TypeTag.StringLiteral;
+        value: string;
+    }
+
+    export interface RuntimeBooleanType extends RuntimeIDBase {
+        type: TypeTag.Boolean;
+    }
+
+    export interface RuntimeBooleanLiteralType extends RuntimeIDBase {
+        type: TypeTag.BooleanLiteral;
+        value: boolean;
+    }
+
+    export interface RuntimeVoidType extends RuntimeIDBase {
+        type: TypeTag.Void;
+    }
+
+    export interface RuntimeNullType extends RuntimeIDBase {
+        type: TypeTag.Null;
+    }
+
+    export interface RuntimeUnionType extends RuntimeIDBase {
+        name?: string;
+        type: TypeTag.Union;
+        members: RuntimeType[];
+    }
+
+    export interface RuntimeIntersectionType extends RuntimeIDBase {
+        name?: string;
+        type: TypeTag.Intersection;
+        members: RuntimeType[];
+    }
+
+    export interface RuntimeTypeParameterType extends RuntimeIDBase {
+        type: TypeTag.TypeParameter;
+        index: number;
+    }
+
+    export interface RuntimeProperty extends RuntimeIDBase {
+        optional: boolean;
+        name: string;
+        type: RuntimeType;
+    }
+
+    export interface RuntimeObjectType extends RuntimeIDBase {
+        name?: string;
+        type: TypeTag.ObjectType;
+        properties: {[name: string]: RuntimeProperty};
+        callSignatures: RuntimeSignature[];
+        constructSignatures: RuntimeSignature[];
+        stringIndexType?: RuntimeType;
+        numericIndexType?: RuntimeType;
     }
 }
