@@ -4715,13 +4715,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
                 }
 
                 emitStart(node);
-                if (compilerOptions.dynamicTypeChecks) {
+                // Ignore function declarations since they get hoisted; we emit those at top of function block.
+                if (compilerOptions.dynamicTypeChecks && (kind === SyntaxKind.FunctionExpression || kind === SyntaxKind.MethodDeclaration)) {
                     write(`RuntimeTypes.registerType(${resolver.getRuntimeTypeForFunction(node, makeTypeVariableName())}, `);
-                    if (kind !== SyntaxKind.FunctionExpression && kind !== SyntaxKind.MethodDeclaration) {
-                        // XXX: Hoisting! Might not work.
-                        emitDeclarationName(node);
-                        write(");\n");
-                    }
                 }
                 // For targeting below es6, emit functions-like declaration including arrow function using function keyword.
                 // When targeting ES6, emit arrow function natively in ES6 by omitting function keyword and using fat arrow instead
@@ -4923,6 +4919,32 @@ const _super = (function (geti, seti) {
                 }
             }
 
+            function emitBlockLocalFunctionDeclarationTypeTags(node: Node) {
+                if (compilerOptions.dynamicTypeChecks) {
+                    // Emit type registrations at top of block for any *function declarations*.
+                    const locals = node.locals;
+                    let first = true;
+                    if (locals) {
+                        for (const localName in locals) {
+                            const local = locals[localName];
+                            if (local.valueDeclaration) {
+                                const decl = local.valueDeclaration;
+                                const kind = decl.kind;
+                                if (kind === SyntaxKind.FunctionDeclaration) {
+                                    if (first) {
+                                        first = false;
+                                        write("\n  ");
+                                    }
+                                    write(`RuntimeTypes.registerType(${resolver.getRuntimeTypeForFunction(<FunctionLikeDeclaration> decl, makeTypeVariableName())}, `);
+                                    emitDeclarationName(decl);
+                                    write(");\n");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             function emitFunctionBody(node: FunctionLikeDeclaration) {
                 if (!node.body) {
                     // There can be no body when there are parse errors.  Just emit an empty block
@@ -5053,6 +5075,7 @@ const _super = (function (geti, seti) {
 
             function emitBlockFunctionBody(node: FunctionLikeDeclaration, body: Block) {
                 write(" {");
+                emitBlockLocalFunctionDeclarationTypeTags(node);
                 const initialTextPos = writer.getTextPos();
 
                 increaseIndent();
@@ -7933,6 +7956,7 @@ const _super = (function (geti, seti) {
                 writeLine();
                 emitShebang();
                 emitDetachedCommentsAndUpdateCommentsInfo(node);
+                emitBlockLocalFunctionDeclarationTypeTags(node);
 
                 if (isExternalModule(node) || compilerOptions.isolatedModules) {
                     if (isOwnFileEmit || (!isExternalModule(node) && compilerOptions.isolatedModules)) {
