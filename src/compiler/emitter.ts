@@ -4717,7 +4717,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
                 emitStart(node);
                 if (compilerOptions.dynamicTypeChecks) {
                     write(`RuntimeTypes.registerType(${resolver.getRuntimeTypeForFunction(node, makeTypeVariableName())}, `);
-                    if (node.kind !== SyntaxKind.FunctionExpression) {
+                    if (kind !== SyntaxKind.FunctionExpression && kind !== SyntaxKind.MethodDeclaration) {
                         // XXX: Hoisting! Might not work.
                         emitDeclarationName(node);
                         write(");\n");
@@ -4745,7 +4745,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
                 }
 
                 emitSignatureAndBody(node);
-                if (compilerOptions.dynamicTypeChecks && node.kind === SyntaxKind.FunctionExpression) {
+                if (compilerOptions.dynamicTypeChecks && (kind === SyntaxKind.FunctionExpression || kind === SyntaxKind.MethodDeclaration)) {
                     write(`)`);
                 }
                 if (modulekind !== ModuleKind.ES6 && kind === SyntaxKind.FunctionDeclaration && parent === currentSourceFile && node.name) {
@@ -5349,6 +5349,11 @@ const _super = (function (geti, seti) {
                 emitStart(ctor || node);
 
                 if (languageVersion < ScriptTarget.ES6) {
+                    if (compilerOptions.dynamicTypeChecks) {
+                        write(`RuntimeTypes.registerType(${resolver.getRuntimeTypeForClassDeclaration(node, makeTypeVariableName())}, `);
+                        emitDeclarationName(node);
+                        write(`);\n`);
+                    }
                     write("function ");
                     emitDeclarationName(node);
                     emitSignatureParameters(ctor);

@@ -385,6 +385,18 @@ namespace ts {
             }
         }
 
+        function getRuntimeTypeForClassDeclaration(node: ClassLikeDeclaration, varName: string): string {
+            const s = getSymbolOfNode(node);
+            const t = getTypeOfSymbol(s);
+            if (t) {
+                console.log(t);
+                return getRuntimeTypeForType(t, varName);
+            } else {
+                console.log(node);
+                throw new Error(`Cannot find type for class!`);
+            }
+        }
+
         /**
          * Emits the given type using `write` if not already written.
          * Uses emitMap to determine if the type is already written.
@@ -506,11 +518,11 @@ ${indent}  args: [${params.map(getTypeOfSymbol).map((t, j) => getNameOrPlacehold
             // ObjectType = Class | Interface | Reference | Tuple | Anonymous,
             } else if (type.flags & (TypeFlags.Class | TypeFlags.Interface | TypeFlags.Anonymous)) {
                 // TODO: Parents??
-                const resolvedType = <ResolvedType>type;
                 write(`  type: ${TypeTag.ObjectType},\n`);
-                if (resolvedType.properties) {
+                const properties = getPropertiesOfType(type);
+                if (properties) {
                     write(`  properties: {\n`);
-                    write(`    ${resolvedType.properties.map((s) => {
+                    write(`    ${properties.map((s) => {
                         const type = getTypeOfSymbol(s);
                         const propTypeVarName = getNameOrPlaceholder(`${varName}.properties['${s.name}'].type`, type);
                         const optional = !!(s.flags & SymbolFlags.Optional);
@@ -519,24 +531,28 @@ ${indent}  args: [${params.map(getTypeOfSymbol).map((t, j) => getNameOrPlacehold
                     write(`  },\n`);
                 }
                 write(`  callSignatures: `);
-                if (resolvedType.callSignatures) {
-                    emitSignatures('    ', 'callSignatures', resolvedType.callSignatures);
+                const callSigs = getSignaturesOfType(type, SignatureKind.Call);
+                if (callSigs) {
+                    emitSignatures('    ', 'callSignatures', callSigs);
                 } else {
                     write("[]");
                 }
                 write(",\n");
                 write(`  constructSignatures: `);
-                if (resolvedType.constructSignatures) {
-                    emitSignatures('    ', 'constructSignatures', resolvedType.constructSignatures);
+                const constructSigs = getSignaturesOfType(type, SignatureKind.Construct);
+                if (constructSigs) {
+                    emitSignatures('    ', 'constructSignatures', constructSigs);
                 } else {
                     write("[]");
                 }
                 write(",\n");
-                if (resolvedType.stringIndexInfo) {
-                    write(`  stringIndexType: ${getNameOrPlaceholder(`${varName}.stringIndexType`, resolvedType.stringIndexInfo.type)},\n`);
+                const stringIndexInfo = getIndexInfoOfType(type, IndexKind.String);
+                if (stringIndexInfo) {
+                    write(`  stringIndexType: ${getNameOrPlaceholder(`${varName}.stringIndexType`, stringIndexInfo.type)},\n`);
                 }
-                if (resolvedType.numberIndexInfo) {
-                    write(`  numericIndexType: ${getNameOrPlaceholder(`${varName}.numericIndexType`, resolvedType.numberIndexInfo.type)},\n`);
+                const numberIndexInfo = getIndexInfoOfType(type, IndexKind.Number);
+                if (numberIndexInfo) {
+                    write(`  numericIndexType: ${getNameOrPlaceholder(`${varName}.numericIndexType`, numberIndexInfo.type)},\n`);
                 }
             } else if (type.flags & TypeFlags.Reference) {
                 // Contains typeArguments that fill in innerTypeParameters in target type.
@@ -18913,7 +18929,8 @@ ${indent}  args: [${params.map(getTypeOfSymbol).map((t, j) => getNameOrPlacehold
                 getTypeReferenceDirectivesForSymbol,
                 emitRuntimeTypeDeclarations,
                 getRuntimeTypeForFunction,
-                getRuntimeTypeForAssertion
+                getRuntimeTypeForAssertion,
+                getRuntimeTypeForClassDeclaration
             };
 
             // defined here to avoid outer scope pollution
