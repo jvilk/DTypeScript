@@ -353,19 +353,35 @@ namespace ts {
 
         return checker;
 
-        function getRuntimeTypeVariableName(node: TypeNode, varName: string): string {
-            const type = getTypeFromTypeNode(node);
-            if (type) {
-                const idStr = `${type.id}`;
-                let entry = dynamicCheckRoots[idStr];
-                if (entry) {
-                    return entry.varName;
-                }
-                dynamicCheckRoots[idStr] = {t: type, varName: varName};
-                return varName;
+        function getRuntimeTypeForType(type: Type, varName: string): string {
+            const idStr = `${type.id}`;
+            let entry = dynamicCheckRoots[idStr];
+            if (entry) {
+                return entry.varName;
+            }
+            dynamicCheckRoots[idStr] = {t: type, varName: varName};
+            return varName;
+        }
+
+        function getRuntimeTypeForAssertion(node: AssertionExpression, varName: string): string {
+            if (node.type) {
+                return getRuntimeTypeForType(getTypeFromTypeNode(node.type), varName);
             } else {
                 console.log(node);
-                throw new Error(`Cannot find type for node!`);
+                throw new Error(`Cannot find type for assertion!`);
+            }
+        }
+
+        function getRuntimeTypeForFunction(node: FunctionLikeDeclaration, varName: string): string {
+            if (node.symbol) {
+                const type = getTypeOfSymbol(node.symbol);
+                if (type.flags & TypeFlags.Anonymous) {
+                    resolveAnonymousTypeMembers(type);
+                }
+                return getRuntimeTypeForType(type, varName);
+            } else {
+                console.log(node);
+                throw new Error(`Cannot find type for function!`);
             }
         }
 
@@ -401,19 +417,20 @@ namespace ts {
             }
 
             function emitSignature(indent: string, type: string, i: number, s: Signature): void {
-                let params = s.typeParameters
-                let restParam: Type = null;
+                let params = s.parameters
+                let restParam: Symbol = null;
+                const returnType = getReturnTypeOfSignature(s);
                 let prefix = `${varName}.${type}[${i}]`;
                 if (s.hasRestParameter) {
                     restParam = params[params.length - 1];
                     params = params.slice(0, params.length - 1);
                 }
                 write(`{
-${indent}  args: [${params.map((t, j) => getNameOrPlaceholder(`${prefix}.args[${j}]`, t)).join(", ")}],\n`);
+${indent}  args: [${params.map(getTypeOfSymbol).map((t, j) => getNameOrPlaceholder(`${prefix}.args[${j}]`, t)).join(", ")}],\n`);
                 if (restParam) {
-                    write(`${indent}  varargs: ${getNameOrPlaceholder(`${prefix}.varargs`, restParam)},\n`);
+                    write(`${indent}  varargs: ${getNameOrPlaceholder(`${prefix}.varargs`, getTypeOfSymbol(restParam))},\n`);
                 }
-                write(`${indent}  result: ${getNameOrPlaceholder(`${prefix}.result`, s.resolvedReturnType)},`);
+                write(`${indent}  result: ${getNameOrPlaceholder(`${prefix}.result`, returnType)},`);
                 write(`${indent}  mandatoryArgs: ${s.minArgumentCount}`);
                 write(`${indent}}`);
             }
@@ -498,7 +515,7 @@ ${indent}  args: [${params.map((t, j) => getNameOrPlaceholder(`${prefix}.args[${
                         const propTypeVarName = getNameOrPlaceholder(`${varName}.properties['${s.name}'].type`, type);
                         const optional = !!(s.flags & SymbolFlags.Optional);
                         return `${s.name}: { optional: ${optional}, name: '${s.name}', type: ${propTypeVarName} }`;
-                    }).join(`,\n    `)},\n`);
+                    }).join(`,\n    `)}\n`);
                     write(`  },\n`);
                 }
                 write(`  callSignatures: `);
@@ -18895,7 +18912,8 @@ ${indent}  args: [${params.map((t, j) => getNameOrPlaceholder(`${prefix}.args[${
                 getTypeReferenceDirectivesForEntityName,
                 getTypeReferenceDirectivesForSymbol,
                 emitRuntimeTypeDeclarations,
-                getRuntimeTypeVariableName
+                getRuntimeTypeForFunction,
+                getRuntimeTypeForAssertion
             };
 
             // defined here to avoid outer scope pollution

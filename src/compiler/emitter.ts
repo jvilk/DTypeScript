@@ -2587,7 +2587,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
                     const sourceFile = getSourceFileOfNode(node);
                     const lineMap = sourceFile.lineMap;
                     const data = computeLineAndCharacterOfPosition(lineMap, node.pos)
-                    write(`, ${resolver.getRuntimeTypeVariableName(node.type, makeTypeVariableName())}, '${sourceFile.fileName}', '${data.line}', '${data.character}')`);
+                    write(`, ${resolver.getRuntimeTypeForAssertion(node, makeTypeVariableName())}, '${sourceFile.fileName}', '${data.line}', '${data.character}')`);
                 } else {
                     emit(node.expression);
                 }
@@ -4716,7 +4716,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 
                 emitStart(node);
                 if (compilerOptions.dynamicTypeChecks) {
-                    write(`RuntimeTypes.registerType(${resolver.getRuntimeTypeVariableName(node.type, makeTypeVariableName())}, `);
+                    write(`RuntimeTypes.registerType(${resolver.getRuntimeTypeForFunction(node, makeTypeVariableName())}, `);
                     if (node.kind !== SyntaxKind.FunctionExpression) {
                         // XXX: Hoisting! Might not work.
                         emitDeclarationName(node);

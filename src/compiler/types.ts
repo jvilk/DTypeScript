@@ -2061,7 +2061,8 @@ namespace ts {
         getExternalModuleFileFromDeclaration(declaration: ImportEqualsDeclaration | ImportDeclaration | ExportDeclaration | ModuleDeclaration): SourceFile;
         getTypeReferenceDirectivesForEntityName(name: EntityNameOrEntityNameExpression): string[];
         getTypeReferenceDirectivesForSymbol(symbol: Symbol, meaning?: SymbolFlags): string[];
-        /* @internal */ getRuntimeTypeVariableName(node: TypeNode, varName: string): string;
+        /* @internal */ getRuntimeTypeForAssertion(node: AssertionExpression, varName: string): string;
+        /* @internal */ getRuntimeTypeForFunction(node: FunctionLikeDeclaration, varName: string): string;
         /* @internal */ emitRuntimeTypeDeclarations(write: (str: string) => void, nextVarName: () => string): void;
     }
 
