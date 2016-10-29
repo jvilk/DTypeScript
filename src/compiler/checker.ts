@@ -386,7 +386,6 @@ namespace ts {
             const s = getSymbolOfNode(node);
             const t = getTypeOfSymbol(s);
             if (t) {
-                console.log(t);
                 return getRuntimeTypeForType(t, varName);
             } else {
                 console.log(node);

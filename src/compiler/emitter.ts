@@ -2515,7 +2515,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
                     superCall = isSuperPropertyOrElementAccess(expression);
                     isAsyncMethodWithSuper = superCall && isInAsyncMethodWithSuperInES6(node);
                     if (callsEval && !superCall && compilerOptions.dynamicTypeChecks) {
-                        write(`(RuntimeTypes.checkedEval(this, `);
+                        write(`(RuntimeTypes.checkedEval(this, { pos: ${node.expression.pos}, end: ${node.end} }, `);
                     }
                     emit(expression);
                 }
@@ -2533,7 +2533,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
                     if (callsEval && !superCall && compilerOptions.dynamicTypeChecks) {
                         write(", ");
                         emitCommaList(node.arguments);
-                        write(`) && (RuntimeTypes.shouldCallEval() ? eval(RuntimeTypes.checkedEvalReturnValue()) || RuntimeTypes.checkedEvalReturnValue()))`);
+                        write(`) && (RuntimeTypes.shouldCallEval() ? eval(RuntimeTypes.checkedEvalReturnValue()) : RuntimeTypes.checkedEvalReturnValue()))`);
                     } else {
                         write("(");
 
