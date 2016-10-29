@@ -375,9 +375,6 @@ namespace ts {
         function getRuntimeTypeForFunction(node: FunctionLikeDeclaration, varName: string): string {
             if (node.symbol) {
                 const type = getTypeOfSymbol(node.symbol);
-                if (type.flags & TypeFlags.Anonymous) {
-                    resolveAnonymousTypeMembers(type);
-                }
                 return getRuntimeTypeForType(type, varName);
             } else {
                 console.log(node);
@@ -394,6 +391,17 @@ namespace ts {
             } else {
                 console.log(node);
                 throw new Error(`Cannot find type for class!`);
+            }
+        }
+
+        function callsEval(node: CallExpression): boolean {
+            const funcType = checkNonNullExpression(node.expression);
+            const apparentType = getApparentType(funcType);
+            if (apparentType) {
+                return !!(apparentType.flags & TypeFlags.ContainsEval);
+            } else {
+                console.log(node);
+                throw new Error(`Cannot find type of function in call expression!`);
             }
         }
 
@@ -1801,6 +1809,9 @@ ${indent}  args: [${params.map(getTypeOfSymbol).map((t, j) => getNameOrPlacehold
         function createObjectType(kind: TypeFlags, symbol?: Symbol): ObjectType {
             const type = <ObjectType>createType(kind);
             type.symbol = symbol;
+            if (symbol && symbol.name === 'eval') {
+                type.flags |= TypeFlags.ContainsEval;
+            }
             return type;
         }
 
@@ -18930,7 +18941,8 @@ ${indent}  args: [${params.map(getTypeOfSymbol).map((t, j) => getNameOrPlacehold
                 emitRuntimeTypeDeclarations,
                 getRuntimeTypeForFunction,
                 getRuntimeTypeForAssertion,
-                getRuntimeTypeForClassDeclaration
+                getRuntimeTypeForClassDeclaration,
+                callsEval
             };
 
             // defined here to avoid outer scope pollution

@@ -2065,6 +2065,7 @@ namespace ts {
         /* @internal */ getRuntimeTypeForAssertion(node: AssertionExpression, varName: string): string;
         /* @internal */ getRuntimeTypeForFunction(node: FunctionLikeDeclaration, varName: string): string;
         /* @internal */ emitRuntimeTypeDeclarations(write: (str: string) => void, nextVarName: () => string): void;
+        /* @internal */ callsEval(node: CallExpression): boolean;
     }
 
     export const enum SymbolFlags {
@@ -2288,6 +2289,8 @@ namespace ts {
         ContainsAnyFunctionType = 1 << 27,  // Type is or contains object literal type
         ThisType                = 1 << 28,  // This type
         ObjectLiteralPatternWithComputedProperties = 1 << 29,  // Object literal type implied by binding pattern has computed properties
+        /* @internal */
+        ContainsEval            = 1 << 30,
 
         /* @internal */
         Nullable = Undefined | Null,
@@ -2315,7 +2318,7 @@ namespace ts {
         /* @internal */
         RequiresWidening = ContainsWideningType | ContainsObjectLiteral,
         /* @internal */
-        PropagatingFlags = ContainsWideningType | ContainsObjectLiteral | ContainsAnyFunctionType
+        PropagatingFlags = ContainsWideningType | ContainsObjectLiteral | ContainsAnyFunctionType | ContainsEval
     }
 
     export type DestructuringPattern = BindingPattern | ObjectLiteralExpression | ArrayLiteralExpression;
@@ -2656,6 +2659,7 @@ namespace ts {
         /*@internal*/ version?: boolean;
         /*@internal*/ watch?: boolean;
         dynamicTypeChecks?: boolean;
+        dynamicTypeVarPrefix?: string;
 
         [option: string]: CompilerOptionsValue | undefined;
     }

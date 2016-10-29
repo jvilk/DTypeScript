@@ -437,6 +437,10 @@ namespace ts {
         {
             name: "dynamicTypeChecks",
             type: "boolean",
+        },
+        {
+            name: "dynamicTypeVarPrefix",
+            type: "string"
         }
     ];
 

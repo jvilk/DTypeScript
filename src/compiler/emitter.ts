@@ -704,8 +704,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
             }
 
             function makeTypeVariableName(): string {
+                let prefix = compilerOptions.dynamicTypeVarPrefix;
+                if (!prefix) {
+                    prefix = `__$type`;
+                }
                 let id = typeVariableNameCount++;
-                let name = `__$type${id}`;
+                let name = `${prefix}${id}`;
                 return makeUniqueName(name);
             }
 
@@ -2500,6 +2504,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
                 }
 
                 const expression = node.expression;
+                const callsEval = compilerOptions.dynamicTypeChecks ? resolver.callsEval(node) : false;
                 let superCall = false;
                 let isAsyncMethodWithSuper = false;
                 if (expression.kind === SyntaxKind.SuperKeyword) {
@@ -2509,6 +2514,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
                 else {
                     superCall = isSuperPropertyOrElementAccess(expression);
                     isAsyncMethodWithSuper = superCall && isInAsyncMethodWithSuperInES6(node);
+                    if (callsEval && !superCall && compilerOptions.dynamicTypeChecks) {
+                        write(`(RuntimeTypes.checkedEval(this, `);
+                    }
                     emit(expression);
                 }
 
@@ -2522,9 +2530,16 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
                     write(")");
                 }
                 else {
-                    write("(");
-                    emitCommaList(node.arguments);
-                    write(")");
+                    if (callsEval && !superCall && compilerOptions.dynamicTypeChecks) {
+                        write(", ");
+                        emitCommaList(node.arguments);
+                        write(`) && (RuntimeTypes.shouldCallEval() ? eval(RuntimeTypes.checkedEvalReturnValue()) || RuntimeTypes.checkedEvalReturnValue()))`);
+                    } else {
+                        write("(");
+
+                        emitCommaList(node.arguments);
+                        write(")");
+                    }
                 }
             }
 
